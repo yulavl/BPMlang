@@ -1574,7 +1574,6 @@ public:
 		}
 		auto expr_lhs = m_allocator.emplace<NodeExpr>(term_lhs.value());
 
-		// Принудительно ставим точке высокий приоритет
 		auto get_op_prec = [&](TokenType_t t) -> std::optional<int> {
 			if (t == TokenType_t::dot) return 10000;
 			// if (t == TokenType_t::arrow) return 10000; 
@@ -1599,7 +1598,6 @@ public:
 			
 			const int next_min_prec = prec.value() + 1;
 			
-			// ИСПРАВЛЕНИЕ ЗДЕСЬ: передаем lcmethod в рекурсивный вызов
 			auto expr_rhs = parse_expr(next_min_prec, lcmethod);
 			
 			if (!expr_rhs.has_value()) {
@@ -1611,7 +1609,60 @@ public:
 			
 			expr_lhs2->var = expr_lhs->var;
 
-			if(type == TokenType_t::plus) {
+			if(type == TokenType_t::dot) {
+				bool rotated = false;
+				// Проверяем, является ли правая часть вызовом метода (NodeTermMtCall)
+				if(std::holds_alternative<NodeTerm*>(expr_rhs.value()->var)) {
+					NodeTerm* rhs_term = std::get<NodeTerm*>(expr_rhs.value()->var);
+					if(std::holds_alternative<NodeTermMtCall*>(rhs_term->var)) {
+						NodeTermMtCall* call = std::get<NodeTermMtCall*>(rhs_term->var);
+						
+						// 1. Создаем узел точки: (LHS . call->mt) -> (obj.b . c)
+						auto dot_node = m_allocator.emplace<NodeBinExprDot>(expr_lhs2, call->mt);
+						
+						// 2. Оборачиваем этот узел точки в NodeExpr
+						auto new_obj_expr = m_allocator.emplace<NodeExpr>();
+						auto dot_bin_expr = m_allocator.emplace<NodeBinExpr>();
+						dot_bin_expr->def = ctok; 
+						dot_bin_expr->var = dot_node;
+						new_obj_expr->var = dot_bin_expr;
+
+						// 3. Подменяем объект lookup-а (mt) на новый (obj.b.c)
+						call->mt = new_obj_expr;
+
+						// 4. !!! ВАЖНОЕ ИСПРАВЛЕНИЕ !!!
+						// Нужно также обновить первый аргумент (self) в списке аргументов.
+						// Иначе в аргументы пойдет просто 'c', который компилятор не найдет.
+						if (call->args.has_value()) {
+							NodeExpr* args_expr = call->args.value();
+							if (std::holds_alternative<NodeBinExpr*>(args_expr->var)) {
+								NodeBinExpr* args_bin = std::get<NodeBinExpr*>(args_expr->var);
+								if (std::holds_alternative<NodeBinExprArgs*>(args_bin->var)) {
+									NodeBinExprArgs* args_list = std::get<NodeBinExprArgs*>(args_bin->var);
+									if (!args_list->args.empty()) {
+										// Заменяем старый 'c' на новый 'obj.b.c'
+										args_list->args[0] = new_obj_expr; 
+									}
+								}
+							}
+						}
+
+						// 5. Результатом левой части становится сам исправленный вызов метода
+						expr_lhs->var = rhs_term;
+						
+						rotated = true;
+					}
+				}
+
+				if (!rotated) {
+					auto dot = m_allocator.emplace<NodeBinExprDot>(expr_lhs2, expr_rhs.value());
+					expr->def = ctok;
+					expr->var = dot;
+					expr_lhs->var = expr;
+				}
+				continue;
+			}
+			else if(type == TokenType_t::plus) {
 				auto add = m_allocator.emplace<NodeBinExprAdd>(expr_lhs2, expr_rhs.value());
 				expr->def = ctok;
 				expr->var = add;
@@ -1656,11 +1707,6 @@ public:
 				expr->def = ctok;
 				expr->var = above;
 			}
-			else if(type == TokenType_t::dot) {
-				auto dot = m_allocator.emplace<NodeBinExprDot>(expr_lhs2, expr_rhs.value());
-				expr->def = ctok;
-				expr->var = dot;
-			}
 			else if(type == TokenType_t::double_ampersand) {
 				auto band = m_allocator.emplace<NodeBinExprAnd>(expr_lhs2, expr_rhs.value());
 				expr->def = ctok;
@@ -1689,6 +1735,7 @@ public:
 		}
 		return expr_lhs;
 	}
+	
 	std::optional<NodeScope*> parse_scope() // NOLINT(*-no-recursion)
 	{
 		if(!try_consume(TokenType_t::open_curly).has_value()) {
