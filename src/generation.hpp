@@ -795,6 +795,11 @@ public:
 					}
 					size_t counter {0};
 					if(!substituted) {
+                        // --- FIX START ---
+						if (proc.templates != NULL && call->targs.size() != proc.templates->size()) {
+							GeneratorError(call->def, "procedure `" + call->name + "` expects " + std::to_string(proc.templates->size()) + " template arguments, but got " + std::to_string(call->targs.size()));
+						}
+                        // --- FIX END ---
 						for(auto&& el : *proc.templates) {
 							temps[el] = call->targs[counter++];
 						}
@@ -855,6 +860,11 @@ public:
 				}
 				size_t counter {0};
 				if(!substituted) {
+                    // --- FIX START ---
+					if (proc.templates != NULL && call->targs.size() != proc.templates->size()) {
+						GeneratorError(call->def, "procedure `" + call->name + "` expects " + std::to_string(proc.templates->size()) + " template arguments, but got " + std::to_string(call->targs.size()));
+					}
+                    // --- FIX END ---
 					for(auto&& el : *proc.templates) {
 						temps[el] = call->targs[counter++];
 					}
@@ -3058,6 +3068,27 @@ AFTER_GEN:
 					gen.GeneratorError(stmt_return->def, "procedure `" + cproc.value().name + "` at return except type " + rettype.to_string() + "\nNOTE: but got type " + gen.type_of_expr(stmt_return->expr.value()).to_string());
 				}
 				if(stmt_return->expr.has_value()) {
+					if (std::holds_alternative<NodeTerm*>(stmt_return->expr.value()->var)) {
+                    	NodeTerm* t = std::get<NodeTerm*>(stmt_return->expr.value()->var);
+                    	if (std::holds_alternative<NodeTermAmpersand*>(t->var)) {
+                        	NodeTermAmpersand* as_amp = std::get<NodeTermAmpersand*>(t->var);
+                        	if (std::holds_alternative<NodeTerm*>(as_amp->expr->var)) {
+                        		NodeTerm* tt = std::get<NodeTerm*>(as_amp->expr->var);
+                        		if (std::holds_alternative<NodeTermIdent*>(tt->var)) {
+                        			NodeTermIdent* id = std::get<NodeTermIdent*>(tt->var);
+                        			std::string name = id->ident.value.value();
+                        			if (gen.var_lookup_cs(name).has_value()) { // _cs ищет только в текущем скоупе? Или во всех локальных?
+                            		 	// Если мы берем адрес локальной переменной...
+                            		 	// ...и если этот код находится внутри выражения return (это сложно отследить здесь).
+                            		 	// Но можно выдать предупреждение.
+                            		 	gen.GeneratorWarning(stmt_return->def, "Taking address of local variable `" + name + "`. "
+                            		                      "Ensure this pointer does not outlive the scope.");
+                        			}
+                        		}
+                        	}
+                    	}
+                	}
+
 					gen.gen_expr(stmt_return->expr.value());
 					gen.pop("eax");
 				}

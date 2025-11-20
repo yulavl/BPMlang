@@ -1100,11 +1100,16 @@ public:
 		exit(EXIT_FAILURE);
 	}
 
-	void ParsingError_t(const std::string& msg, const Token& tok) noexcept
+	void ParsingError_t(const std::string& msg, const Token& tok, bool ex = true) noexcept
 	{
-		putloc(tok);
-		std::cout << " ERROR: " << msg << "\n";
-		exit(EXIT_FAILURE);
+		DiagnosticMessage(tok, "error", msg, 0);
+		if(ex) exit(EXIT_FAILURE);
+	}
+
+	void ParsingNote(const std::string& msg, const Token& tok, bool ex = true) noexcept
+	{
+		DiagnosticMessage(tok, "note", msg, 0);
+		if(ex) exit(EXIT_FAILURE);
 	}
 
 	void error_expected(const std::string& msg)
@@ -2372,7 +2377,8 @@ public:
 		if(auto _struct = try_consume(TokenType_t::_struct)) {
 			Token def = _struct.value();
 			auto stmt_struct = m_allocator.emplace<NodeStmtStruct>();
-			stmt_struct->name = try_consume_err(TokenType_t::ident).value.value();
+			Token nametok = try_consume_err(TokenType_t::ident);
+			stmt_struct->name = nametok.value.value();
 			stmt_struct->def = def;
 			stmt_struct->__allocator = std::nullopt;
 			stmt_struct->temp = false;
@@ -2398,6 +2404,15 @@ public:
 				Token ident = try_consume_err(TokenType_t::ident);
 				try_consume_err(TokenType_t::double_dot);
 				DataType dtype(parse_type());
+				if (dtype.is_object() && dtype.getobjectname() == stmt_struct->name) {
+                    // Проверяем, является ли это указателем или ссылкой
+                    if (dtype.root().ptrlvl == 0 && !dtype.root().link) {
+                    	DiagnosticMessage(ident, "error", "Recursive struct definition `" + stmt_struct->name + 
+                                       "` contains itself without pointer or reference indirection.", 0);
+                    	DiagnosticMessage(nametok, "note", "Structure defined here.", 0);
+                    	exit(EXIT_FAILURE);
+                    }
+                }
 				stmt_struct->fields.push_back(std::make_pair(ident.value.value(), dtype));
 				if(peek().has_value() && peek().value().type != TokenType_t::close_curly) {
 					try_consume_err(TokenType_t::comma);
