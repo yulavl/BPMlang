@@ -205,55 +205,8 @@ void *memalloc(size_t size_bytes)
     return NULL;
 }
 
-void memfree(void *ptr)
-{
-    if (ptr != NULL) {
-        const int index = chunk_list_find(&alloced_chunks, ptr);
-        if(index < 0) {
-            printf("ERROR: double free of pointer %p\n", ptr);
-            *(int*)NULL = 0;
-        }
-        assert(ptr == alloced_chunks.chunks[index].start);
-        chunk_list_insert(&freed_chunks,
-                          alloced_chunks.chunks[index].start,
-                          alloced_chunks.chunks[index].size);
-        chunk_list_remove(&alloced_chunks, (size_t) index);
-    }
-}
-
-static void mark_region(const uintptr_t *start, const uintptr_t *end)
-{
-    for (; start < end; start += 1) {
-        const uintptr_t *p = (const uintptr_t *) *start;
-        for (size_t i = 0; i < alloced_chunks.count; ++i) {
-            Chunk chunk = alloced_chunks.chunks[i];
-            if (chunk.start <= p && p < chunk.start + chunk.size) {
-                if (!reachable_chunks[i]) {
-                    reachable_chunks[i] = true;
-                    mark_region(chunk.start, chunk.start + chunk.size);
-                }
-            }
-        }
-    }
-}
-
-void heap_collect()
-{
-    __all_heap_collects += 1;
-    const uintptr_t *stack_start = (const uintptr_t*)__builtin_frame_address(0);
-    memset(reachable_chunks, 0, sizeof(reachable_chunks));
-    mark_region(stack_start, stack_base + 1);
-    to_free_count = 0;
-    for (size_t i = 0; i < alloced_chunks.count; ++i) {
-        if (!reachable_chunks[i]) {
-            assert(to_free_count < CHUNK_LIST_CAP);
-            to_free[to_free_count++] = alloced_chunks.chunks[i].start;
-        }
-    }
-
-    for (size_t i = 0; i < to_free_count; ++i) {
-        memfree(to_free[i]);
-    }
+char* __double_free_exception(uintptr_t __val) {
+    return "double free of pointer";
 }
 
 typedef char*(*__what_t)(void*);
@@ -357,4 +310,58 @@ uintptr_t __bpm_get_current_exception() {
 int32_t __bpm_exception_throwed() {
     if(__current_exception != NULL) return 1;
     return 0;
+}
+
+void memfree(void *ptr)
+{
+    if (ptr != NULL) {
+        const int index = chunk_list_find(&alloced_chunks, ptr);
+        if(index < 0) {
+            __bpm_exception* exc = __bpm_allocate_exception(3, 0, (__what_t)__double_free_exception);
+            __bpm_throw(exc);
+            //printf("ERROR: double free of pointer %p\n", ptr);
+            //*(int*)NULL = 0;
+            return;
+        }
+        assert(ptr == alloced_chunks.chunks[index].start);
+        chunk_list_insert(&freed_chunks,
+                          alloced_chunks.chunks[index].start,
+                          alloced_chunks.chunks[index].size);
+        chunk_list_remove(&alloced_chunks, (size_t) index);
+    }
+}
+
+static void mark_region(const uintptr_t *start, const uintptr_t *end)
+{
+    for (; start < end; start += 1) {
+        const uintptr_t *p = (const uintptr_t *) *start;
+        for (size_t i = 0; i < alloced_chunks.count; ++i) {
+            Chunk chunk = alloced_chunks.chunks[i];
+            if (chunk.start <= p && p < chunk.start + chunk.size) {
+                if (!reachable_chunks[i]) {
+                    reachable_chunks[i] = true;
+                    mark_region(chunk.start, chunk.start + chunk.size);
+                }
+            }
+        }
+    }
+}
+
+void heap_collect()
+{
+    __all_heap_collects += 1;
+    const uintptr_t *stack_start = (const uintptr_t*)__builtin_frame_address(0);
+    memset(reachable_chunks, 0, sizeof(reachable_chunks));
+    mark_region(stack_start, stack_base + 1);
+    to_free_count = 0;
+    for (size_t i = 0; i < alloced_chunks.count; ++i) {
+        if (!reachable_chunks[i]) {
+            assert(to_free_count < CHUNK_LIST_CAP);
+            to_free[to_free_count++] = alloced_chunks.chunks[i].start;
+        }
+    }
+
+    for (size_t i = 0; i < to_free_count; ++i) {
+        memfree(to_free[i]);
+    }
 }
