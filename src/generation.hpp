@@ -1419,31 +1419,46 @@ public:
 					gen.GeneratorError(term_call->def, "procedure `" + term_call->name + "` excepts template arguments in <...>.");
 				}
 				std::string tsign;
-				if(!term_call->targs.empty()) {
-					for(int i = 0;i < static_cast<int>(term_call->targs.size());++i) {
-						gen.substitute_template(term_call->targs[i]);
-						tsign += term_call->targs[i].sign();
-					}
-					if(!proc.instanceated[tsign]) {
-						Generator dop_gen(gen);
-						gen.m_namespaces[nname]->procs[pname].instanceated[tsign] = true;
-						dop_gen.m_output << nname << "@" << proc.name << tsign;
-						dop_gen.m_output << ":\n";
-						dop_gen.m_output << "    push ebp\n";
-						dop_gen.m_output << "    mov ebp, esp\n";
-						dop_gen.gen_traceback_push_nm(proc, nname);
-						dop_gen.m_tsigns.push_back(tsign);
-						size_t counter {0};
-						dop_gen.m_temps.emplace_back(__map<std::string, DataType>{});
-						for(auto&& el : *proc.templates) {
-							dop_gen.m_temps[dop_gen.m_temps.size() - 1][el] = term_call->targs[counter++];
-						}
-						if(substituted) gen.substitute_template_params(temps, proc.params);
-						else gen.substitute_template_params(dop_gen.m_temps.back(), proc.params);
-						proc.mbn = nname;
-						dop_gen.substitute_template(proc.rettype);
-						dop_gen.m_cur_proc = proc;
-						dop_gen.gen_scope_sp(proc.scope, proc.from, proc);
+				if (!term_call->targs.empty()) {
+				    for (int i = 0; i < static_cast<int>(term_call->targs.size()); ++i) {
+				        gen.substitute_template(term_call->targs[i]);
+				        tsign += term_call->targs[i].sign();
+				    }
+				
+				    // Берём именно тот Procedure, который реально выбран оверлоад-резолвером
+				    Procedure* inst_p = proc.override
+				        ? gen.m_namespaces[nname]->procs[pname].overrides[proc.overload_nth - 1]
+				        : &gen.m_namespaces[nname]->procs[pname];
+				
+				    if (!inst_p->instanceated[tsign]) {
+				        Generator dop_gen(gen);
+				
+				        dop_gen.m_temps.emplace_back(__map<std::string, DataType>{});
+				        size_t counter {0};
+				        for (auto&& el : *proc.templates) {
+				            dop_gen.m_temps.back()[el] = term_call->targs[counter++];
+				        }
+				
+				        if (substituted)
+				            gen.substitute_template_params(temps, proc.params);
+				        else
+				            gen.substitute_template_params(dop_gen.m_temps.back(), proc.params);
+				
+				        inst_p->instanceated[tsign] = true;
+				
+				        dop_gen.m_output << nname << "@" << proc.name << tsign;
+				        if (proc.override)
+				            dop_gen.m_output << proc.get_sign(); // ВАЖНО: различать перегрузки
+				        dop_gen.m_output << ":\n";
+				
+				        dop_gen.m_output << "    push ebp\n";
+				        dop_gen.m_output << "    mov ebp, esp\n";
+				        dop_gen.gen_traceback_push_nm(proc, nname);
+				        dop_gen.m_tsigns.push_back(tsign);
+				        proc.mbn = nname;
+				        dop_gen.substitute_template(proc.rettype);
+				        dop_gen.m_cur_proc = proc;
+				        dop_gen.gen_scope_sp(proc.scope, proc.from, proc);
 						if(!substituted) {
 							temps = std::move(dop_gen.m_temps.back());
 						}
@@ -1477,8 +1492,10 @@ public:
 					gen.gen_args(gen.__getargs(term_call->args.value()), proc.params);
 				}
 				gen.m_output << "    call " << nname << "@" << pname;
-				if(proc.override) gen.m_output << proc.get_sign();
-				if(!term_call->targs.empty()) gen.m_output << tsign;
+				if (!term_call->targs.empty())
+				    gen.m_output << tsign;
+				if (proc.override)
+				    gen.m_output << proc.get_sign();
 				gen.m_output << "\n";
 				if(stack_allign != 0) {
 					gen.m_output << "    add esp, " << stack_allign * 4 << "\n";
