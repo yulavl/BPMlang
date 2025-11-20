@@ -309,6 +309,25 @@ BaseDataType make_char_type() {
 	return tp;
 }
 
+void copy_tree_chain(TreeNode<BaseDataType>* src, TreeNode<BaseDataType>* dest_parent, DataType& dest_dt) {
+    if (!src) return;
+        
+    TreeNode<BaseDataType>* current_src = src;
+    TreeNode<BaseDataType>* current_dest = dest_parent;
+    
+    while(current_src != nullptr) {
+        // Вставляем данные в список справа
+        dest_dt.list.insert_right(current_src->data, current_dest);
+        
+        // Переходим к только что созданному узлу справа
+        if (current_dest->right != nullptr) {
+            current_dest = current_dest->right;
+        }
+        
+        current_src = current_src->right;
+    }
+ }
+
 BaseDataType BaseDataTypeInt = make_int_type();
 BaseDataType BaseDataTypePtr = make_ptr_type();
 BaseDataType BaseDataTypeVoid = make_void_type();
@@ -964,8 +983,31 @@ public:
 		if(peek().has_value() && peek().value().type == TokenType_t::less) {
 			consume(); // <
 			while(peek().has_value() && peek().value().type != TokenType_t::above) {
-				res.list.insert_right(parse_type().root(), current);
-				current = current->right;
+                // 1. Исправление сдвига (>>)
+				check_split_shr(); 
+				if(peek().value().type == TokenType_t::above) break;
+
+                // 2. Парсим аргумент (например, AAA<int>)
+                DataType arg_type = parse_type();
+                
+                // 3. Вставляем корень аргумента (AAA)
+				res.list.insert_right(arg_type.root(), current);
+                
+                // 4. Переходим к узлу, который только что вставили (AAA)
+				current = current->right; 
+
+                // 5. ВАЖНО: Копируем хвост аргумента (int), если он есть
+                if (arg_type.list.get_root()->right != nullptr) {
+                    copy_tree_chain(arg_type.list.get_root()->right, current, res);
+                    
+                    // Проматываем current до конца вставленной цепочки, 
+                    // чтобы следующий аргумент (если он есть) встал после int
+                    while(current->right != nullptr) {
+                        current = current->right;
+                    }
+                }
+
+				check_split_shr();
 				if(peek().has_value() && peek().value().type != TokenType_t::above) {
 					try_consume_err(TokenType_t::comma);
 				}
@@ -1181,19 +1223,60 @@ public:
 		}
 	}
 
+	void check_split_shr() {
+        if(peek().has_value() && peek().value().type == TokenType_t::shift_right) {
+            m_tokens[m_index].type = TokenType_t::above;
+            m_tokens[m_index].value = ">";
+            Token next_tok = m_tokens[m_index];
+            next_tok.col++;
+            m_tokens.insert(m_tokens.begin() + m_index + 1, next_tok);
+        }
+    }
+
 	bool is_temp_call() {
 		if(!peek().has_value()) return false;
-		if(!peek(1).has_value()) return false;
-		if(!peek(2).has_value()) return false;
-		if(!peek(3).has_value()) return false;
 		if(peek().value().type != TokenType_t::ident) return false;
+		
+		if(!peek(1).has_value()) return false;
 		if(peek(1).value().type != TokenType_t::less) return false;
-		int i;
-		for(i = 2;peek(i).has_value() && peek(i).value().type != TokenType_t::above;++i) {
-			if(!is_type_token(peek(i).value().type) && peek(i).value().type != TokenType_t::comma && peek(i).value().type != TokenType_t::star && peek(i).value().type != TokenType_t::double_ampersand && peek(i).value().type != TokenType_t::ampersand) return false;
+
+		int i = 2;
+		int nest = 1;
+		while(peek(i).has_value()) {
+			TokenType_t t = peek(i).value().type;
+			if(t == TokenType_t::less) {
+				nest++;
+			}
+			else if(t == TokenType_t::above) {
+				nest--;
+				if(nest == 0) {
+					i++;
+					break;
+				}
+			}
+			else if(t == TokenType_t::shift_right) {
+				nest -= 2;
+				if(nest <= 0) {
+					if(nest < 0) return false;
+					i++;
+					break;
+				}
+			}
+			else {
+				if(!is_type_token(t) && 
+				   t != TokenType_t::comma && 
+				   t != TokenType_t::star && 
+				   t != TokenType_t::double_ampersand && 
+				   t != TokenType_t::ampersand &&
+				   t != TokenType_t::double_colon) { 
+					return false;
+				}
+			}
+			i++;
 		}
-		if(!peek(i).has_value()) return false;
-		if(peek(i++).value().type != TokenType_t::above) return false;
+		
+		if(nest != 0) return false;
+
 		if(!peek(i).has_value()) return false;
 		if(peek(i).value().type != TokenType_t::open_paren) return false;
 		return true;

@@ -486,51 +486,184 @@ public:
 		DiagnosticMessage(tok, "warning", msg, 0);
 	}
 
-	/*function returns type of field {}.{}*/
-	DataType type_of_dot(const NodeBinExprDot* dot, const Token& def) {
-		DataType otype = type_of_expr(dot->lhs);
-		if(std::holds_alternative<NodeTerm*>(dot->rhs->var)) {
-			NodeTerm* id = std::get<NodeTerm*>(dot->rhs->var);
-			if(!std::holds_alternative<NodeTermIdent*>(id->var)) {
-				return BaseDataTypeVoid;
-			}
-			NodeTermIdent* tid = std::get<NodeTermIdent*>(id->var);
-			Token ident = tid->ident;
-			std::string field_name = ident.value.value();
-			if(!otype.root().is_object) {
-				return BaseDataTypeVoid;
-			}
-			std::string struct_name = otype.root().getobjectname();
-			std::optional<Struct> st = struct_lookup(struct_name);
-			if(st.has_value()) {
-				std::optional<Field> field = field_lookup(st.value(), field_name);		
-				if(!field.has_value()) {
-					GeneratorError(def, "struct `" + struct_name + "` don't have field `" + field_name + "`");
-				}
-				Struct stc = st.value();
-				Field fd = field.value();
-				if(stc.temp) {
-					__stdvec<DataType> targs;
-					TreeNode<BaseDataType>* current = otype.list.get_root()->right;
-					while(current != nullptr) {
-						targs.push_back(current->data);
-						current = current->right;
-					}
-					__map<std::string, DataType> temps = compute_temps(stc.temps, targs);
-					substitute_template_wct(fd.type, temps);
-				}
-				return fd.type;
-			}
-			std::optional<Interface> inter = inter_lookup(struct_name);
-			if(inter.has_value()) {
-				std::optional<Field> field = field_lookup(inter.value(), field_name);		
-				return field.value().type;
-			}
-			return BaseDataTypeVoid;
-		} else {
-			return BaseDataTypeVoid;
+	DataType extract_full_type(TreeNode<BaseDataType>* start_node) {
+        DataType dt;
+        if (!start_node) return dt;
+
+        // Копируем корень
+        dt = start_node->data;
+
+        // Копируем хвост
+        if (start_node->right) {
+            TreeNode<BaseDataType>* src = start_node->right;
+            TreeNode<BaseDataType>* dest = dt.list.get_root();
+            
+            while(src != nullptr) {
+                dt.list.insert_right(src->data, dest);
+                dest = dest->right;
+                src = src->right;
+            }
+        }
+        return dt;
+    }
+
+    DataType create_datatype_from_chain(TreeNode<BaseDataType>* start_node) {
+        DataType dt;
+        if (!start_node) return dt;
+
+        // 1. Сначала обязательно создаем корень
+        dt.list.insert_data(start_node->data, dt.list.get_root_ptr());
+        
+        // 2. Теперь копируем хвост
+        TreeNode<BaseDataType>* src = start_node->right;
+        TreeNode<BaseDataType>* dest = dt.list.get_root(); // Теперь это не nullptr
+
+        while(src != nullptr) {
+            dt.list.insert_right(src->data, dest);
+            
+            // Сдвигаем указатель назначения на только что созданный узел.
+            // В BinaryTree insert_right создает узел в dest->right.
+            dest = dest->right; 
+            
+            src = src->right;
+        }
+        return dt;
+    }
+
+	void append_type_chain(DataType& target_dt, TreeNode<BaseDataType>* target_node, DataType& source_dt) {
+		TreeNode<BaseDataType>* src_curr = source_dt.list.get_root(); // Берем корень типа-аргумента (например AAA)
+		TreeNode<BaseDataType>* dst_curr = target_node;
+		
+		while(src_curr != nullptr) {
+			target_dt.list.insert_right(src_curr->data, dst_curr);
+			dst_curr = dst_curr->right;
+			src_curr = src_curr->right;
 		}
 	}
+
+	size_t count_template_nodes(TreeNode<BaseDataType>* start_node) {
+        if (!start_node) return 0;
+        
+        size_t total_nodes = 1; // Текущий узел (например, AAA)
+        
+        if (start_node->data.is_object) {
+            std::string name = start_node->data.getobjectname();
+            size_t expected_args = 0;
+            
+            std::optional<Struct> st = struct_lookup(name);
+            if (st.has_value() && st.value().temp) {
+                expected_args = st.value().temps.size();
+            } 
+            // Если есть интерфейсы с шаблонами, добавить проверку inter_lookup здесь
+
+            // Указатель на первый аргумент (следующий в списке right)
+            TreeNode<BaseDataType>* child_iter = start_node->right;
+            
+            for(size_t i = 0; i < expected_args; ++i) {
+                if (!child_iter) break; // Защита от битых типов
+
+                // Рекурсивно узнаем, сколько узлов занимает этот аргумент
+                size_t arg_len = count_template_nodes(child_iter);
+                total_nodes += arg_len;
+                
+                // Пропускаем все узлы этого аргумента, чтобы перейти к следующему
+                for(size_t k = 0; k < arg_len; ++k) {
+                    if (child_iter) child_iter = child_iter->right;
+                }
+            }
+        }
+        
+        return total_nodes;
+    }
+
+    // Создает новый DataType, копируя count узлов из цепочки start_node
+    DataType extract_type_nodes(TreeNode<BaseDataType>* start_node, size_t count) {
+        DataType dt;
+        if (count == 0 || !start_node) return dt;
+        
+        // Копируем корень
+        dt = start_node->data; 
+        
+        TreeNode<BaseDataType>* src = start_node->right;
+        TreeNode<BaseDataType>* dst = dt.list.get_root();
+        
+        // Копируем хвост (count-1 узлов)
+        for(size_t i = 1; i < count; ++i) {
+            if(!src) break;
+            dt.list.insert_right(src->data, dst);
+            
+            // insert_right создает узел справа, сдвигаем dst на него
+            dst = dst->right; 
+            src = src->right;
+        }
+        return dt;
+    }
+	/*function returns type of field {}.{}*/
+	DataType type_of_dot(const NodeBinExprDot* dot, const Token& def) {
+        DataType otype = type_of_expr(dot->lhs);
+        if(std::holds_alternative<NodeTerm*>(dot->rhs->var)) {
+            NodeTerm* id = std::get<NodeTerm*>(dot->rhs->var);
+            if(!std::holds_alternative<NodeTermIdent*>(id->var)) {
+                return BaseDataTypeVoid;
+            }
+            NodeTermIdent* tid = std::get<NodeTermIdent*>(id->var);
+            Token ident = tid->ident;
+            std::string field_name = ident.value.value();
+            if(!otype.root().is_object) {
+                return BaseDataTypeVoid;
+            }
+            std::string struct_name = otype.root().getobjectname();
+            std::optional<Struct> st = struct_lookup(struct_name);
+            
+            if(st.has_value()) {
+                std::optional<Field> field = field_lookup(st.value(), field_name);      
+                if(!field.has_value()) {
+                    GeneratorError(def, "struct `" + struct_name + "` don't have field `" + field_name + "`");
+                }
+                Struct stc = st.value();
+                Field fd = field.value();
+                
+                // --- ИСПРАВЛЕННАЯ ЛОГИКА ШАБЛОНОВ ---
+                if(stc.temp) {
+                    __stdvec<DataType> targs;
+                    TreeNode<BaseDataType>* current = otype.list.get_root()->right;
+                    
+                    // Итерируемся ровно по количеству ожидаемых параметров шаблона
+                    for(size_t i = 0; i < stc.temps.size(); ++i) {
+                        if (current == nullptr) {
+                            GeneratorError(def, "Internal Compiler Error: malformed template type inside type_of_dot.");
+                        }
+
+                        // 1. Считаем длину текущего типа-аргумента
+                        size_t arg_len = count_template_nodes(current);
+                        
+                        // 2. Извлекаем его в отдельный DataType
+                        targs.push_back(extract_type_nodes(current, arg_len));
+                        
+                        // 3. Сдвигаем current на следующий аргумент
+                        for(size_t k = 0; k < arg_len; ++k) {
+                            if (current) current = current->right;
+                        }
+                    }
+                    
+                    __map<std::string, DataType> temps = compute_temps(stc.temps, targs);
+                    substitute_template_wct(fd.type, temps);
+                }
+                // -------------------------------------
+
+                return fd.type;
+            }
+            
+            std::optional<Interface> inter = inter_lookup(struct_name);
+            if(inter.has_value()) {
+                std::optional<Field> field = field_lookup(inter.value(), field_name);        
+                return field.value().type;
+            }
+            return BaseDataTypeVoid;
+        } else {
+            return BaseDataTypeVoid;
+        }
+    }
 
 	DataType type_of_expr(const NodeExpr* expr) {
 		DataType res = __type_of_expr(expr);
@@ -677,11 +810,22 @@ public:
 					DataType dt = bs;
 					if(st.temp && call->targs.size() != st.temps.size()) GeneratorError(call->def, "struct `" + st.name + "` except " + std::to_string(st.temps.size()) + " template arguments in <...>, bug got " + std::to_string(call->targs.size()) + ".");
 					TreeNode<BaseDataType>* current = dt.list.get_root();
+					
+					// --- НАЧАЛО ИЗМЕНЕНИЙ ---
 					for(int i = 0;i < static_cast<int>(call->targs.size());++i) {
 						substitute_template(call->targs[i]);
-						dt.list.insert_right(call->targs[i].root(), current);
-						current = current->right;
+						
+						// Вместо одной вставки, вставляем всю цепочку типа аргумента
+						append_type_chain(dt, current, call->targs[i]);
+						
+						// Проматываем current до конца только что вставленного хвоста,
+						// чтобы следующий аргумент (если он есть) добавился после.
+						while(current->right != nullptr) {
+							current = current->right;
+						}
 					}
+					// --- КОНЕЦ ИЗМЕНЕНИЙ ---
+					
 					return dt;
 				}
 				GeneratorError(call->def, "unkown procedure `" + name + "`");
@@ -2478,7 +2622,9 @@ AFTER_GEN:
 							cur = cur->right;
 						}
 						assert(cur != nullptr);
-						targs[counter] = cur->data;
+						
+						// Здесь вызывается исправленная функция
+						targs[counter] = create_datatype_from_chain(cur);
 					}
 					else targs[counter] = type_of_expr(args[i]);
 				}
@@ -2552,7 +2698,10 @@ AFTER_GEN:
 							cur = cur->right;
 						}
 						assert(cur != nullptr);
-						targs[counter] = cur->data;
+
+						// БЫЛО: targs[counter] = cur->data;
+						// СТАЛО:
+						targs[counter] = create_datatype_from_chain(cur);
 					}
 					else targs[counter] = type_of_expr(args[i]);
 				}
