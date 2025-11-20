@@ -1096,8 +1096,22 @@ public:
 
 	void ParsingError(const std::string& msg, const int pos = 0) noexcept
 	{
-		DiagnosticMessage(peek(pos).value(), "error", msg, 0);
-		exit(EXIT_FAILURE);
+	    auto tok_opt = peek(pos);
+	    if (tok_opt.has_value()) {
+	        DiagnosticMessage(tok_opt.value(), "error", msg, 0);
+	    } else if (peek().has_value()) {
+	        // хотя бы текущий токен есть
+	        DiagnosticMessage(peek().value(), "error", msg, 0);
+	    } else {
+	        // вообще нет токенов: искусственный "EOF"-токен
+	        Token fake;
+	        fake.type = TokenType_t::ident;
+	        fake.line = 0;
+	        fake.col = 0;
+	        fake.file = "<eof>";
+	        DiagnosticMessage(fake, "error", msg, 0);
+	    }
+	    exit(EXIT_FAILURE);
 	}
 
 	void ParsingError_t(const std::string& msg, const Token& tok, bool ex = true) noexcept
@@ -1917,6 +1931,10 @@ public:
 
 	std::optional<NodeStmt*> parse_stmt() // NOLINT(*-no-recursion)
 	{
+		std::optional<Token> tok0 = peek();
+		if (!tok0.has_value()) {
+    		return {};  // нет токена -> нет оператора
+		}
 		if (peek().has_value() && peek().value().type == TokenType_t::exit && peek(1).has_value()
 			&& peek(1).value().type == TokenType_t::open_paren) {
 			consume();
