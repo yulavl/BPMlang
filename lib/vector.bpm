@@ -1,4 +1,5 @@
 include "std"
+include "exception"
 
 struct vector<T> {
 	m_data: ptr,
@@ -78,6 +79,9 @@ impl vector<T> [new] {
 		return self.m_size == 0;
 	}
 	proc insert(vector<T> self, int index, T value) {
+		if(self.m_size < index) {
+			raise std::exception("index out of bounds");
+		}
 		if(self.m_size == 0) {
 			self~push(value);
 			return;
