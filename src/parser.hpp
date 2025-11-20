@@ -33,13 +33,30 @@ struct BaseDataType {
 	}
 	std::string sign() const {
 		std::string res;
-		std::string ts(this->to_string_d());
-		res += ts[0];
-		res += ts[ts.size() - 1];
-		for(size_t i = 0ULL;i < this->ptrlvl;++i)
-			res += "PR";
-		if(this->link) res += "LL";
-		if(this->rvalue) res += "RV";
+		
+		// 1. Кодируем модификаторы (указатели, ссылки)
+		if(ptrlvl > 0) res += "P" + std::to_string(ptrlvl);
+		if(link) res += "R";
+		if(rvalue) res += "V";
+
+		// 2. Кодируем сам тип
+		if(is_object) {
+			// Формат: [Длина][Имя] (например, 3AAA)
+			std::string name = getobjectname();
+			res += std::to_string(name.length()) + name;
+		} else {
+			// Короткие коды для примитивов
+			switch(getsimpletype()) {
+			case SimpleDataType::_int:   res += "i"; break;
+			case SimpleDataType::ptr:    res += "p"; break;
+			case SimpleDataType::_void:  res += "v"; break;
+			case SimpleDataType::any:    res += "a"; break;
+			case SimpleDataType::_char:  res += "c"; break;
+			case SimpleDataType::_constexpr: res += "x"; break;
+			case SimpleDataType::proc_ptr:   res += "f"; break;
+			default: res += "u"; break;
+			}
+		}
 		return res;
 	}
 	std::string to_string() const {
@@ -234,18 +251,15 @@ struct DataType {
 		return list.get_root()->data;
 	}
 	std::string sign() const {
+		std::string res;
 		TreeNode<BaseDataType>* current = list.get_root();
-		std::string res(current->data.sign());
-		current = current->right;
-		if(current == nullptr) {
-			return res;
-		}
-		res += "TS";
+		
 		while(current != nullptr) {
 			res += current->data.sign();
+			// Добавляем разделитель, чтобы аргументы не слипались
+			res += "_"; 
 			current = current->right;
 		}
-		res += "TE";
 		return res;
 	}
 	std::string to_string() const {

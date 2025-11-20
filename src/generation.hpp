@@ -160,9 +160,9 @@ public:
 				return std::to_string(uniq_sign.value());
 			}
 			std::string res;
-			for(int i = 0;i < static_cast<int>(params.size());++i) {
+			for(size_t i = 0; i < params.size(); ++i) {
+				// Теперь просто вызываем sign(), он сам обработает вложенность
 				res += params[i].second.sign();
-				res += params[i].first[0];
 			}
 			return res;
 		}
